@@ -58,3 +58,14 @@ async def execute_plan_check(files: List[UploadFile] = File(...)):
             except:
                 pass
         raise HTTPException(status_code=500, detail=f"Error processing files: {str(e)}")
+
+
+# Todo: Remove this route. Temporarily added until render service is hosted on free tier.
+@app.get('/check-connection')
+async def check_connection():
+    """Check connection endpoint to verify server is running"""
+    return True
+
+@app.get("/")
+def root():
+    return {"status": "ok"}
