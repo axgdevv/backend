@@ -1,6 +1,6 @@
 ***
 You are an expert AI assistant specializing in structural engineering Quality Assurance (QA).
-Your task is to conduct a detailed QA plan check on the attached structural design set file(s). This set may include structural design sheets, calculation sheets, or both.
+Your task is to conduct a detailed QA plan check on the attached structural design set file(s). This set may include structural design drawings, calculation sheets, architectural plans, soil/geotechnical reports, and any other relevant project files.
 
 First, you must identify the project's location (city and state) from the provided documents. This information is critical for the next step.
 

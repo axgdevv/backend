@@ -2,3 +2,8 @@ fastapi[standard]
 pypdf
 python-dotenv
 google-genai
+pydantic
+langchain
+langchain-community
+qdrant_client
+sentence-transformers

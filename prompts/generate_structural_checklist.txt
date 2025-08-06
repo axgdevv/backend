@@ -1,0 +1,56 @@
+You are an expert structural engineer. Based on the provided design analysis, past city review comments, and the attached General Structural QA Checklist, generate a comprehensive, detailed, and to-the-point checklist in valid JSON format.
+
+    Prioritize and adapt items from the "General Structural QA Checklist" to be highly relevant to the specific project details and concerns raised in the city comments. Ensure the checklist is thorough and actionable.
+
+    DESIGN ANALYSIS:
+    - Project Type: {design_analysis.project_type}
+    - City/Location: {design_analysis.city}
+    - Design Description: {design_analysis.design_description}
+    - Key Elements: {', '.join(design_analysis.key_elements)}
+
+    RELEVANT PAST CITY COMMENTS ({len(relevant_comments)} comments from {design_analysis.city}):
+    {comments_context}
+
+    You must return ONLY a valid JSON object with this exact structure:
+    {{
+      "project_info": {{
+        "city": "{design_analysis.city}",
+        "project_type": "{design_analysis.project_type}",
+        "design_focus": "Brief summary of main design focus areas"
+      }},
+      "checklist_items": [
+        {{
+          "category": "Structural",
+          "item": "Verify foundation design calculations based on geotechnical report recommendations.",
+          "description": "Cross-reference proposed foundation sizing, reinforcement, and bearing capacity calculations with the specific recommendations for this project's soil conditions (e.g., from section 3.1 Concrete Footing Design).",
+          "priority": "High"
+        }},
+        {{
+          "category": "Code Compliance",
+          "item": "Review seismic design requirements for California Building Code (CBC) and ASCE 7.",
+          "description": "Ensure seismic design parameters (SS, S1, SDC, Importance Factor) and lateral force resisting system (e.g., shear walls, per section 1.2 and 1.3) meet the latest California Building Code and ASCE 7 standards relevant to the project's city.",
+          "priority": "High"
+        }},
+        {{
+          "category": "Documentation",
+          "item": "Ensure all structural drawings clearly differentiate existing, demolished, and new construction.",
+          "description": "Verify drawing clarity and consistent use of symbols, especially for remodel/renovation projects as per section 5.1 and 5.3 of the General Checklist.",
+          "priority": "Medium"
+        }}
+      ],
+      "summary_of_key_concerns": "Summarize the overarching concerns derived from the relevant past city comments and their implications for the design.",
+      "suggested_next_steps": [
+        "Outline actionable next steps for the engineering team, prioritizing critical items based on the generated checklist and identified concerns.",
+        "For example: 'Coordinate with geotechnical engineer for a revised report addressing liquefaction concerns.'"
+      ]
+    }}
+
+    REQUIREMENTS:
+    1.  **Select, adapt, and refine checklist items** from the "GENERAL STRUCTURAL QA CHECKLIST" provided, making them specifically relevant to the "DESIGN ANALYSIS" and any issues highlighted in "RELEVANT PAST CITY COMMENTS".
+    2.  **Generate a comprehensive list of checklist items.** Do not limit the number of items; include all highly relevant and specific checks.
+    3.  **Ensure items are "to the point" and actionable.** Avoid vague statements.
+    4.  Categories for checklist items: Structural, Code Compliance, Documentation, Design Details, Safety.
+    5.  Priority levels: High, Medium, Low (assign logically based on criticality and potential impact).
+    6.  Provide a concise `summary_of_key_concerns` that synthesizes critical issues and common themes from the `RELEVANT PAST CITY COMMENTS`.
+    7.  Outline clear and actionable `suggested_next_steps` for the project, directly addressing the checklist items and key concerns.
+    8.  Return ONLY the JSON object - no additional text or formatting.
