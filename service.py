@@ -1,14 +1,18 @@
 # Core libraries
+import datetime
 import json
 import os
-from typing import List, Dict
+from typing import List, Dict, Optional
 import pathlib
 
+from bson import ObjectId
+from datetime import datetime
 # FastAPI:
 from fastapi import HTTPException
 
 # Pydantic
 from pydantic import BaseModel
+from email.utils import parsedate_to_datetime
 
 # LangChain:
 from langchain.schema import Document
@@ -26,6 +30,10 @@ from google.genai import types
 
 # Load Environment variable
 from dotenv import load_dotenv
+
+from database import get_database
+from pymongo import ReturnDocument
+
 load_dotenv()
 
 # Load Gemini Client:
@@ -49,7 +57,6 @@ class PlanCheckResponse(BaseModel):
     items: List[PlanCheckItem]
 
 # Checklist Generation:
-
 class ChecklistItem(BaseModel):
     category: str
     item: str
@@ -71,7 +78,6 @@ class DesignAnalysis(BaseModel):
     key_elements: List[str]
 
 # City Comments:
-
 class Comment(BaseModel):
     text: str
 
@@ -571,7 +577,6 @@ class PlanCheck:
         Returns:
             Generated checklist with categorized items
         """
-        print("this is the print in generate list")
         relevant_comments = self.get_contextual_comments(design_analysis)
         comments_context = "\n".join([
             f"- {doc.page_content[:200]}{'...' if len(doc.page_content) > 200 else ''} (City: {doc.metadata.get('city', 'Unknown')}, Type: {doc.metadata.get('project_type', 'Unknown')})"
@@ -594,7 +599,6 @@ class PlanCheck:
         #     num_comments=len(relevant_comments),
         #     comments_context=comments_context
         # )
-        print('right before checklist llm')
 
         prompt= f"""You are an expert structural engineer. Based on the provided design analysis, past city review comments, and the attached General Structural QA Checklist, generate a comprehensive, detailed, and to-the-point checklist in valid JSON format.
 
@@ -731,7 +735,140 @@ class MainService:
         else:
             print("MainService initialized - no existing vectorstore found")
 
-    async def execute_plan_check(self, temp_file_paths: List[str]) -> PlanCheckResponse:
+        try:
+            self.db = get_database()
+            print("MainService initialized with database connection")
+        except Exception as e:
+            print(f"Warning: Could not initialize database: {e}")
+            self.db = None# Access DB only here, when it's ready
+
+    async def ingest_comments(self, temp_file_paths: List[str]) -> Dict:
+        """
+        Ingest comments from PDF files into Qdrant vector store.
+        Args:
+            temp_file_paths: List of paths to PDF files
+        Returns:
+            Dictionary with ingestion status
+        """
+        try:
+            # Extract comments from PDFs
+            project_comments_data = await self.plan_check.extract_comments_with_gemini(temp_file_paths)
+
+            # Process and store in vector store
+            await self.plan_check.process_comments(project_comments_data, append_mode=True)
+
+            self.vectorstore_loaded = True
+
+            return {
+                "status": "success",
+                "message": f"Successfully ingested {len(project_comments_data)} comment files into Qdrant",
+                "files_processed": len(project_comments_data)
+            }
+        except Exception as e:
+            return {
+                "status": "error",
+                "message": f"Error ingesting comments: {str(e)}",
+                "files_processed": 0
+            }
+
+    #################### CRUD for users ####################
+    async def google_sign_in(self, user_data: dict) -> str:
+        """Create or update a Google user in MongoDB."""
+
+        filter_query = {"email": user_data.get("email", "")}
+
+        update_data = {
+            "$set": {
+                "full_name": user_data.get("full_name", ""),
+                "email_verified": user_data.get("email_verified", False),
+                "last_login_at": user_data.get("last_sign_in_at", datetime.now()),
+                "role": user_data.get("role", "user"),
+                "status": user_data.get("status", "active"),
+                "photo_url": user_data.get("photo_url", ""),
+            },
+            "$setOnInsert": {
+                "_id": user_data.get("firebase_uid", ""),
+                "created_at": user_data.get("created_at", datetime.now()),
+            }
+        }
+
+        updated_user = await self.db["users"].find_one_and_update(
+            filter_query,
+            update_data,
+            upsert=True,
+            return_document=ReturnDocument.AFTER
+        )
+
+        return str(updated_user["_id"])
+
+    #################### CRUD for Checklist ####################
+    async def generate_structural_checklist(self, file_path: str, user_id: str, checklist_id: str) -> ChecklistResponse:
+        """
+        Complete pipeline to analyze a design and generate a contextual checklist.
+        Args:
+            file_path: Path to the structural design document
+        Returns:
+            GeneratedChecklist with items specific to the design
+        """
+        try:
+            structural_design_analysis = await self.plan_check.analyze_structural_design_with_gemini(file_path)
+            structural_checklist = await self.plan_check.generate_structural_checklist(structural_design_analysis)
+
+            structural_checklist_dict = structural_checklist.model_dump()
+            data = {
+                "_id": checklist_id,
+                "user_id": user_id,
+                "project_info": structural_checklist_dict.get("project_info", {}),
+                "checklist_items": structural_checklist_dict.get("checklist_items", []),
+                "relevant_comments_count": structural_checklist_dict.get("relevant_comments_count", 0),
+                "summary_of_key_concerns": structural_checklist_dict.get("summary_of_key_concerns", ""),
+                "suggested_next_steps": structural_checklist_dict.get("suggested_next_steps", []),
+                "created_at": datetime.now(),
+                "updated_at": datetime.now(),
+            }
+
+
+            await self.db["checklists"].insert_one(data)
+
+            return structural_checklist
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error generating design checklist: {str(e)}")
+
+    async def get_checklists_by_user(self, user_id) -> List[dict]:
+        """Get recent checklists (for cases without user authentication)"""
+        cursor = self.db["checklists"].find({"user_id": user_id}).sort("created_at", -1)
+        checklists = await cursor.to_list(None)
+        for checklist in checklists:
+            checklist["_id"] = str(checklist["_id"])
+        return checklists
+
+    async def get_checklist_by_id(self, checklist_id: str) -> Optional[dict]:
+        """Get checklist by ID"""
+        checklist = await self.db["checklists"].find_one({"_id": checklist_id})
+        if checklist:
+            checklist["_id"] = str(checklist["_id"])
+        return checklist
+
+    async def update_checklist(self, checklist_id: str, project_info: ProjectInfo) -> dict:
+        result = await self.db["checklists"].update_one(
+            {"_id": checklist_id},
+            {"$set": {"project_info": project_info.model_dump()}}
+        )
+        if result.matched_count == 0:
+            raise HTTPException(status_code=404, detail="Checklist not found")
+        updated = await self.db["checklists"].find_one({"_id": checklist_id})
+        if updated:
+            updated["_id"] = str(updated["_id"])
+        return updated
+
+    async def delete_checklist(self, checklist_id: str):
+        result = await self.db["checklists"].delete_one({"_id": checklist_id})
+        if result.deleted_count == 0:
+            raise HTTPException(status_code=404, detail="Checklist not found")
+        return {"message": "Checklist deleted successfully"}
+
+    #################### CRUD for Plan Check ####################
+    async def execute_plan_check(self, temp_file_paths: List[str], user_id: str, plan_check_id: str) -> PlanCheckResponse:
         """
         Execute plan check on the provided design set
         Args:
@@ -780,53 +917,46 @@ class MainService:
                     print(f"Error: Could not validate JSON against PlanCheckResponse model. {e}")
                     return PlanCheckResponse(project_info=ProjectInfo(project_name="Unknown", client_name="Unknown"),
                                              items=[])
+            plan_check_response_dict = plan_check_response.model_dump()
 
+            data = {
+                "_id": plan_check_id,
+                "user_id": user_id,
+                "project_info": plan_check_response_dict.get("project_info", {}),
+                "items": plan_check_response_dict.get("items", []),  # matches PlanCheckResponse model
+                "created_at": datetime.now(),
+                "updated_at": datetime.now(),
+            }
+
+            await self.db["plan-checks"].insert_one(data)
             return plan_check_response
 
         except Exception as e:
             print(f"Error generating checklist with Gemini: {str(e)}")
 
-    async def generate_structural_checklist(self, file_path: str) -> ChecklistResponse:
-        """
-        Complete pipeline to analyze a design and generate a contextual checklist.
-        Args:
-            file_path: Path to the structural design document
-        Returns:
-            GeneratedChecklist with items specific to the design
-        """
-        try:
-            structural_design_analysis = await self.plan_check.analyze_structural_design_with_gemini(file_path)
+    async def get_plan_checks_by_user(self, user_id) -> List[dict]:
+        """Get recent plan checks"""
+        cursor = self.db["plan-checks"].find({"user_id": user_id}).sort("created_at", -1)
+        plan_checks = await cursor.to_list(None)
+        for plan_check in plan_checks:
+            plan_check["_id"] = str(plan_check["_id"])
+        return plan_checks
 
-            structural_checklist = await self.plan_check.generate_structural_checklist(structural_design_analysis)
-            return structural_checklist
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error generating design checklist: {str(e)}")
+    async def get_plan_check_by_id(self, plan_check_id: str) -> Optional[dict]:
+        """Get plan check by ID"""
+        plan_check = await self.db["plan-checks"].find_one({"_id": plan_check_id})
+        if plan_check:
+            plan_check["_id"] = str(plan_check["_id"])
+        return plan_check
 
-    async def ingest_comments(self, temp_file_paths: List[str]) -> Dict:
-        """
-        Ingest comments from PDF files into Qdrant vector store.
-        Args:
-            temp_file_paths: List of paths to PDF files
-        Returns:
-            Dictionary with ingestion status
-        """
-        try:
-            # Extract comments from PDFs
-            project_comments_data = await self.plan_check.extract_comments_with_gemini(temp_file_paths)
-
-            # Process and store in vector store
-            await self.plan_check.process_comments(project_comments_data, append_mode=True)
-
-            self.vectorstore_loaded = True
-
-            return {
-                "status": "success",
-                "message": f"Successfully ingested {len(project_comments_data)} comment files into Qdrant",
-                "files_processed": len(project_comments_data)
-            }
-        except Exception as e:
-            return {
-                "status": "error",
-                "message": f"Error ingesting comments: {str(e)}",
-                "files_processed": 0
-            }
+    async def update_plan_check(self, plan_check_id: str, project_info: ProjectInfo) -> dict:
+        result = await self.db["plan-checks"].update_one(
+            {"_id": plan_check_id},
+            {"$set": {"project_info": project_info.model_dump()}}
+        )
+        if result.matched_count == 0:
+            raise HTTPException(status_code=404, detail="plan check not found")
+        updated = await self.db["plan-checks"].find_one({"_id": plan_check_id})
+        if updated:
+            updated["_id"] = str(updated["_id"])
+        return updated
