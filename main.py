@@ -3,6 +3,7 @@ import tempfile
 from contextlib import asynccontextmanager
 from datetime import datetime
 
+import psutil
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Query
 from fastapi.responses import JSONResponse
 from typing import List, Dict
@@ -59,13 +60,17 @@ main_service=None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global main_service
-    # Startup event: Connect to MongoDB
-    await connect_to_mongo()
-    main_service = MainService()
-    yield
-    # Shutdown event: Close MongoDB connection
-    await close_mongo_connection()
 
+    # Connect to MongoDB
+    await connect_to_mongo()
+
+    # Initialize main service
+    main_service = MainService()
+
+    yield  # app is running
+
+    # Shutdown: close MongoDB connection
+    await close_mongo_connection()
 app = FastAPI(lifespan=lifespan)
 
 # CORS
