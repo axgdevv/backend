@@ -1,14 +1,10 @@
 import os
 import tempfile
 from contextlib import asynccontextmanager
-from datetime import datetime
-
-import psutil
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Query
 from fastapi.responses import JSONResponse
 from typing import List, Dict
 from fastapi.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel
 
 from service import MainService
