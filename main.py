@@ -3,14 +3,13 @@ import tempfile
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Query
 from fastapi.responses import JSONResponse
-from typing import List, Dict
+from typing import List, Dict, Any
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from service import MainService
 from dotenv import load_dotenv
 from database import connect_to_mongo, close_mongo_connection
-
 
 class ChecklistRequest(BaseModel):
     checklist_id: str
@@ -29,6 +28,23 @@ class UserRequest(BaseModel):
 
 class UserIdRequest(BaseModel):
     user_id: str
+
+class ProjectChecklistsRequest(BaseModel):
+    user_id: str
+    project_id: str
+
+class ProjectRequest(BaseModel):
+    project_name: str
+    client_name: str
+    project_type: str
+    state: str
+    city: str
+    user_id: str
+    # checklist_count: int
+    # qa_count: int
+    # created_at: str
+    # status: str
+    # domain: str
 
 class ChecklistIdRequest(BaseModel):
     checklist_id: str
@@ -81,8 +97,21 @@ app.add_middleware(
 )
 
 
+
+
+
+# Todo: Remove this route. Temporarily added until render service is hosted on free tier.
+@app.get('/check-connection')
+async def check_connection():
+    """Check connection endpoint to verify server is running"""
+    return True
+
+
+
+
+
 # Ingest Comments:
-@app.post("/plan-check/structural/ingest-city-comments")
+@app.post("/knowledgebase/structural/ingest-city-comments")
 async def ingest_city_comments(files: List[UploadFile] = File(...)):
     """
     Ingest city comment documents into the RAG system.
@@ -127,20 +156,63 @@ async def ingest_city_comments(files: List[UploadFile] = File(...)):
                 pass
         raise HTTPException(status_code=500, detail=f"Error processing files: {str(e)}")
 
-# Todo: Remove this route. Temporarily added until render service is hosted on free tier.
-@app.get('/check-connection')
-async def check_connection():
-    """Check connection endpoint to verify server is running"""
-    return True
 
 
-#################### CRUD for Plan Review ####################
 
-@app.post('/plan-check/execute')
-async def execute_plan_check(files: List[UploadFile] = File(...), user_id: str = Form(...), plan_check_id: str = Form(...)):
+# API Routes for Projects:
+@app.post('/projects/structural/create')
+async def create_project(request: dict):
+    try:
+        new_project = await main_service.create_project(project_data=request)
+        return new_project
+    except Exception as e:
+        raise (HTTPException(status_code=500, detail=f"Failed to create project: {str(e)}"))
+
+@app.post('/projects/structural/get-all')
+async def get_projects_by_user(request: UserIdRequest):
+    try:
+        projects = await main_service.get_projects_by_user(user_id=request.user_id)
+        return projects
+    except Exception as e:
+        raise (HTTPException(status_code=500, detail=f"Failed to get checklists: {str(e)}"))
+
+@app.get("/projects/structural/{id}")
+async def get_project_by_id(id: str):
+    try:
+        project = await main_service.get_project_by_id(project_id=id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        return project
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get project: {str(e)}")
+
+@app.get("/projects/structural/{id}/qas")
+async def get_project_qas(id: str):
+    try:
+        qas = await main_service.get_project_qas(project_id=id)
+        return qas
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get Project QAs: {str(e)}")
+
+@app.get("/projects/structural/{id}/checklists")
+async def get_project_checklists(id: str):
+    try:
+        checklists = await main_service.get_project_checklists(project_id=id)
+        return checklists
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get Project Checklists: {str(e)}")
+
+# Todo: Add Delete Project Route
+
+
+
+
+
+# API Routes for Plan QA:
+@app.post('/qas/structural/execute')
+async def execute_qa(files: List[UploadFile] = File(...), user_id: str = Form(...), project_id: str = Form(...), title: str = Form(...)):
     temp_file_paths = []
 
-    print(user_id, plan_check_id)
     try:
 
         for file in files:
@@ -153,11 +225,10 @@ async def execute_plan_check(files: List[UploadFile] = File(...), user_id: str =
                 temp_file.write(content)
                 temp_file_paths.append(temp_file.name)
 
+        # Execute a QA on plan set:
+        result = await main_service.execute_qa(temp_file_paths, user_id, project_id, title)
 
-        # Curate a list of potential errors
-        result = await main_service.execute_plan_check(temp_file_paths, user_id, plan_check_id)
-
-        return {"items": result.items, "project_info": result.project_info, "success": True, }
+        return result
 
     except Exception as e:
         for temp_path in temp_file_paths:
@@ -167,40 +238,22 @@ async def execute_plan_check(files: List[UploadFile] = File(...), user_id: str =
                 pass
         raise HTTPException(status_code=500, detail=f"Error processing files: {str(e)}")
 
-@app.post('/plan-check/structural/get-user-plan-checks')
-async def get_checklists_by_user(request: UserIdRequest):
+@app.get("/qas/structural/{id}")
+async def get_qa_by_id(id: str):
     try:
-        plan_checks = await main_service.get_plan_checks_by_user(user_id=request.user_id)
-        return plan_checks
+        qa = await main_service.get_qa_by_id(qa_id=id)
+        return qa
     except Exception as e:
-        raise (HTTPException(status_code=500, detail=f"Failed to get checklists: {str(e)}"))
+        raise HTTPException(status_code=500, detail=f"Failed to get QA Run: {str(e)}")
 
-@app.post('/plan-check/structural/get-plan-check-by-id')
-async def get_checklist_by_id(request: PlanCheckIdRequest):
-    try:
-        plan_check = await main_service.get_plan_check_by_id(plan_check_id=request.plan_check_id)
-        return plan_check
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get checklists: {str(e)}")
-
-@app.post('/plan-check/structural/update-plan-check')
-async def update_checklist(request: UpdatePlanCheckRequest):
-    try:
-        plan_check = await main_service.update_plan_check(plan_check_id=request.plan_check_id, project_info=request.project_info)
-        return plan_check
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get checklists: {str(e)}")
-
-@app.post('/plan-check/structural/get-user-plan-checks')
-async def get_checklists_by_user(request: UserIdRequest):
-    try:
-        plan_checks = await main_service.get_plan_checks_by_user(user_id=request.user_id)
-        return plan_checks
-    except Exception as e:
-        raise (HTTPException(status_code=500, detail=f"Failed to get checklists: {str(e)}"))
+# Todo: Add Delete QA Run Route
+# Todo: Add Update QA Run Route
 
 
-#################### CRUD for Users ####################
+
+
+
+# API Routes for Users:
 @app.post('/users/signin-google')
 async def google_sign_in(request: dict):
     """Create a checklist"""
@@ -212,9 +265,12 @@ async def google_sign_in(request: dict):
         raise HTTPException(status_code=500, detail=f"Error creating a checklist: {str(e)}")
 
 
-#################### CRUD for Checklist ####################
-@app.post("/plan-check/structural/generate-checklist")
-async def generate_checklist(file: UploadFile = File(...), user_id: str = Form(...), checklist_id: str = Form(...)):
+
+
+
+# API Routes for Checklists:
+@app.post("/checklists/structural/generate")
+async def generate_checklist(file: UploadFile = File(...), user_id: str = Form(...), project_id: str = Form(...), title: str = Form(...)):
     """
     Analyze a structural design document and generate a contextual checklist based on past city comments.
 
@@ -237,7 +293,7 @@ async def generate_checklist(file: UploadFile = File(...), user_id: str = Form(.
 
         try:
             # Generate checklist
-            checklist_response = await main_service.generate_structural_checklist(temp_file_path, user_id, checklist_id)
+            checklist_response = await main_service.generate_structural_checklist(temp_file_path, user_id, project_id, title)
             return checklist_response
 
         finally:
@@ -250,35 +306,23 @@ async def generate_checklist(file: UploadFile = File(...), user_id: str = Form(.
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error analyzing design: {str(e)}")
 
-@app.post('/plan-check/structural/get-user-checklists')
-async def get_checklists_by_user(request: UserIdRequest):
+@app.get("/checklists/structural/{id}")
+async def get_checklist_by_id(id: str):
     try:
-        checklists = await main_service.get_checklists_by_user(user_id=request.user_id)
-        return checklists
+        checklist = await main_service.get_checklist_by_id(checklist_id=id)
+        return checklist
     except Exception as e:
-        raise (HTTPException(status_code=500, detail=f"Failed to get checklists: {str(e)}"))
+        raise HTTPException(status_code=500, detail=f"Failed to get Checklist: {str(e)}")
 
-@app.post('/plan-check/structural/get-checklist-by-id')
-async def get_checklist_by_id(request: ChecklistIdRequest):
-    try:
-        checklists = await main_service.get_checklist_by_id(checklist_id=request.checklist_id)
-        return checklists
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get checklists: {str(e)}")
-
-@app.post('/plan-check/structural/update-checklist')
-async def update_checklist(request: UpdateChecklistRequest):
-    try:
-        checklists = await main_service.update_checklist(checklist_id=request.checklist_id, project_info=request.project_info)
-        return checklists
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get checklists: {str(e)}")
-
-@app.post("/plan-check/structural/delete-checklist")
-async def delete_checklist_route(
+@app.post("/checklists/structural/delete")
+async def delete_checklist(
     request: ChecklistIdRequest,
 ):
     return await main_service.delete_checklist(request.checklist_id)
+
+# Todo: Add Update Checklist Route
+
+
 
 @app.get("/")
 def root():
