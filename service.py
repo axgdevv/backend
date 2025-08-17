@@ -5,7 +5,6 @@ import os
 from typing import List, Dict, Optional, Any
 import pathlib
 import gc
-from contextlib import contextmanager
 
 from bson import ObjectId
 from datetime import datetime
@@ -14,7 +13,6 @@ from fastapi import HTTPException
 
 # Pydantic
 from pydantic import BaseModel
-from email.utils import parsedate_to_datetime
 
 # LangChain:
 from langchain.schema import Document
@@ -96,12 +94,18 @@ class ProjectCommentsResponse(BaseModel):
     project_type: str
     comments: List[Comment]
 
+
+class MonthlyData(BaseModel):
+    month: str
+    count: int
+
 class DashboardStats(BaseModel):
     total_projects_this_month: int
     active_projects_this_month: int
     completed_projects: int
     projects_by_location: List[Dict[str, Any]]
     top_issue_categories: List[Dict[str, Any]]
+    monthly_completed_projects: List[MonthlyData]
 
 def cleanup_memory():
     """Force garbage collection to free up memory"""
@@ -917,3 +921,167 @@ class MainService:
         return checklists
 
     # Todo: Add Delete Project Logic
+
+    # Logic for Dashboard:
+    async def get_dashboard_stats(self, user_id: str) -> DashboardStats:
+        """Get dashboard statistics for a user"""
+        try:
+            # Get current month and year date ranges
+            now = datetime.now()
+            start_of_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            start_of_year = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+
+            # 1. Total Projects This Month
+            total_projects_this_month = await self.db["projects"].count_documents({
+                "user_id": user_id,
+                "created_at": {"$gte": start_of_month}
+            })
+
+            # 2. Active Projects This Month
+            active_projects_this_month = await self.db["projects"].count_documents({
+                "user_id": user_id,
+                "created_at": {"$gte": start_of_month},
+                "status": "in_progress"
+            })
+
+            # 3. Completed Projects (all time)
+            completed_projects = await self.db["projects"].count_documents({
+                "user_id": user_id,
+                "status": "completed"
+            })
+
+            # 4. Projects By Location
+            location_pipeline = [
+                {"$match": {"user_id": user_id}},
+                {
+                    "$group": {
+                        "_id": {
+                            "city": "$city",
+                            "state": "$state"
+                        },
+                        "count": {"$sum": 1}
+                    }
+                },
+                {
+                    "$project": {
+                        "_id": 0,
+                        "location": {
+                            "$concat": [
+                                {"$ifNull": ["$_id.city", "Unknown City"]},
+                                ", ",
+                                {"$ifNull": ["$_id.state", "Unknown State"]}
+                            ]
+                        },
+                        "city": "$_id.city",
+                        "state": "$_id.state",
+                        "count": 1
+                    }
+                },
+                {"$sort": {"count": -1}},
+                {"$limit": 10}
+            ]
+
+            location_cursor = self.db["projects"].aggregate(location_pipeline)
+            projects_by_location = await location_cursor.to_list(length=None)
+
+            # 5. Monthly Completed Projects This Year
+            monthly_completed_pipeline = [
+                {
+                    "$match": {
+                        "user_id": user_id,
+                        "status": "completed",
+                        "completed_at": {"$gte": start_of_year}
+                    }
+                },
+                {
+                    "$group": {
+                        "_id": {
+                            "year": {"$year": "$completed_at"},
+                            "month": {"$month": "$completed_at"}
+                        },
+                        "count": {"$sum": 1}
+                    }
+                },
+                {
+                    "$project": {
+                        "_id": 0,
+                        "month": "$_id.month",
+                        "year": "$_id.year",
+                        "count": 1
+                    }
+                },
+                {"$sort": {"month": 1}}
+            ]
+
+            monthly_cursor = self.db["projects"].aggregate(monthly_completed_pipeline)
+            monthly_data = await monthly_cursor.to_list(length=None)
+
+            # Fill in missing months with 0 counts
+            month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                           "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+            monthly_completed_projects = []
+            existing_months = {item['month']: item['count'] for item in monthly_data}
+
+            for month in range(1, 13):
+                monthly_completed_projects.append({
+                    "month": month_names[month - 1],
+                    "count": existing_months.get(month, 0)
+                })
+
+            # 6. Top Issue Categories in QA Runs
+            categories_pipeline = [
+                {"$match": {"user_id": user_id}},
+                {"$unwind": "$items"},
+                {
+                    "$group": {
+                        "_id": "$items.category",
+                        "count": {"$sum": 1},
+                        "high_priority_count": {
+                            "$sum": {
+                                "$cond": [{"$eq": ["$items.priority", "High"]}, 1, 0]
+                            }
+                        }
+                    }
+                },
+                {
+                    "$project": {
+                        "_id": 0,
+                        "category": "$_id",
+                        "count": 1,
+                        "high_priority_count": 1
+                    }
+                },
+                {"$sort": {"count": -1}},
+                {"$limit": 8}
+            ]
+
+            categories_cursor = self.db["qas"].aggregate(categories_pipeline)
+            top_issue_categories = await categories_cursor.to_list(length=None)
+
+            # Calculate percentages
+            total_items = sum(item['count'] for item in top_issue_categories) if top_issue_categories else 1
+            for item in top_issue_categories:
+                item['percentage'] = round((item['count'] / total_items) * 100, 1)
+
+            return DashboardStats(
+                total_projects_this_month=total_projects_this_month,
+                active_projects_this_month=active_projects_this_month,
+                completed_projects=completed_projects,
+                projects_by_location=projects_by_location,
+                top_issue_categories=top_issue_categories,
+                monthly_completed_projects=monthly_completed_projects  # Add this to your DashboardStats interface
+            )
+
+        except Exception as e:
+            print(f"Error getting dashboard stats: {str(e)}")
+            # Return empty stats on error for production stability
+            return DashboardStats(
+                total_projects_this_month=0,
+                active_projects_this_month=0,
+                completed_projects=0,
+                projects_by_location=[],
+                top_issue_categories=[],
+                monthly_completed_projects=[]
+            )
+
