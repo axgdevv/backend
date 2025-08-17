@@ -324,6 +324,33 @@ async def delete_checklist(
 
 
 
+
+@app.post("/dashboard/structural/stats")
+async def get_dashboard_stats(request: UserIdRequest):
+    """
+    Get dashboard statistics for a user
+
+    Returns:
+        - Total projects created this month
+        - Active projects this month
+        - Completed projects (all time)
+        - Projects by location breakdown
+        - Top issue categories from QA runs
+    """
+    if not request.user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+
+    try:
+        stats = await main_service.get_dashboard_stats(user_id=request.user_id)
+        return stats.dict()
+    except Exception as e:
+        print(f"Dashboard stats error for user {request.user_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to get dashboard stats")
+
+
+
+
+
 @app.get("/")
 def root():
     return {"status": "ok"}
