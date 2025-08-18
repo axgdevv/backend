@@ -3,7 +3,7 @@ import tempfile
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Query
 from fastapi.responses import JSONResponse
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Literal
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -70,6 +70,24 @@ class UserProjectsRequest(BaseModel):
     limit: Optional[int] = 4
     search: Optional[str] = ""
     status: Optional[str] = None
+
+class UpdateProjectStatusPayload(BaseModel):
+    id: str
+    status: Literal["in_progress", "completed", "under_review", "cancelled"]
+
+class DeleteProjectRequest(BaseModel):
+    id: str
+    user_id: str
+
+class DeleteQARequest(BaseModel):
+    id: str
+    project_id: str
+    user_id: str
+
+class DeleteChecklistRequest(BaseModel):
+    checklist_id: str
+    project_id: str
+    user_id: str
 
 # Load Env
 load_dotenv()
@@ -212,24 +230,53 @@ async def get_project_by_id(id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get project: {str(e)}")
 
+# backend routes
+
 @app.get("/projects/structural/{id}/qas")
-async def get_project_qas(id: str):
+async def get_project_qas(id: str, page: int = 1, limit: int = 4):
     try:
-        qas = await main_service.get_project_qas(project_id=id)
+        qas = await main_service.get_project_qas(project_id=id, page=page, limit=limit)
         return qas
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get Project QAs: {str(e)}")
 
 @app.get("/projects/structural/{id}/checklists")
-async def get_project_checklists(id: str):
+async def get_project_checklists(id: str, page: int = 1, limit: int = 4):
     try:
-        checklists = await main_service.get_project_checklists(project_id=id)
+        checklists = await main_service.get_project_checklists(project_id=id, page=page, limit=limit)
         return checklists
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get Project Checklists: {str(e)}")
 
-# Todo: Add Delete Project Route
+@app.post("/projects/structural/update", response_model=dict)
+async def update_project_status(payload: UpdateProjectStatusPayload):
+    """
+    Handles the API request to update a project's status.
+    """
+    try:
+        # Call the service layer to perform the business logic
+        updated_project = await main_service.update_project_status(
+            project_id=payload.id,
+            new_status=payload.status
+        )
 
+        # The service returns None if the project isn't found
+        if updated_project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        return updated_project
+
+    except Exception as e:
+        # Catch any exceptions bubbled up from the service layer
+        raise HTTPException(status_code=500, detail=f"Failed to update project status: {str(e)}")
+
+@app.post("projects/structural/delete")
+async def delete_project_by_id(request: DeleteProjectRequest):
+    try:
+        deleted_project = await main_service.delete_project(project_id=request.id, user_id=request.user_id)
+        return deleted_project
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to Delete Project: {str(e)}")
 
 
 
@@ -272,10 +319,17 @@ async def get_qa_by_id(id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get QA Run: {str(e)}")
 
-# Todo: Add Delete QA Run Route
-# Todo: Add Update QA Run Route
-
-
+@app.post("/qas/structural/delete")
+async def delete_qa_by_id(request: DeleteQARequest):
+    try:
+        deleted_project = await main_service.delete_qa(
+            qa_id=request.id,
+            project_id=request.project_id,
+            user_id=request.user_id
+        )
+        return deleted_project
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to Delete QA: {str(e)}")
 
 
 
@@ -342,11 +396,16 @@ async def get_checklist_by_id(id: str):
 
 @app.post("/checklists/structural/delete")
 async def delete_checklist(
-    request: ChecklistIdRequest,
+    request: DeleteChecklistRequest,
 ):
-    return await main_service.delete_checklist(request.checklist_id)
-
-# Todo: Add Update Checklist Route
+    try:
+        return await main_service.delete_checklist(
+            checklist_id=request.checklist_id,
+            project_id=request.project_id,
+            user_id=request.user_id
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to Delete Checklist: {str(e)}")
 
 
 
