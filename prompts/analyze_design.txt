@@ -1,18 +1,20 @@
 You are an expert structural engineer. Analyze this structural design document and extract the following information in JSON format:
-    {
-      "filename": "<name of the document file>",
-      "city": "<city/location where this project is located>",
-      "project_type": "<type of project: Single-Family Residential, Multi-Family, Commercial, Industrial, etc.>",
-      "design_description": "<comprehensive description of the structural design, including building type, materials, structural systems, etc.>",
-      "key_elements": [
-        "<key structural element 1>",
-        "<key structural element 2>",
-        "<etc.>"
-      ]
-    }
-    ### Instructions:
-    - Provide a detailed design_description covering the structural system, materials, building characteristics
-    - Include key_elements like foundation type, framing material, roof structure, seismic considerations, etc.
-    - Infer city/location and project_type from the document if not explicitly stated
-    - Focus on structural aspects that would be subject to city review
-    - Be specific and technical in your analysis
+{
+  "filename": "<name of the document file>",
+  "city": "<city/location where this project is located>",
+  "state": "<state abbreviation, e.g., CA, AZ, TX>",
+  "project_type": "<type of project: Single-Family Residential, Multi-Family, Commercial, Industrial, etc.>",
+  "design_description": "<comprehensive description of the structural design, including building type, materials, structural systems, etc.>",
+  "key_elements": [
+    "<key structural element 1>",
+    "<key structural element 2>",
+    "<etc.>"
+  ]
+}
+### Instructions:
+- Provide a detailed design_description covering the structural system, materials, and building characteristics
+- Include key_elements like foundation type, framing material, roof structure, seismic considerations, etc.
+- Infer city, state, and project_type from the document if not explicitly stated; otherwise return null
+- Focus on structural aspects that would be subject to city review
+- Be specific and technical in your analysis
+- Return only a single valid JSON object as described above
