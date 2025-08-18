@@ -68,21 +68,33 @@ class UpdateChecklistRequest(BaseModel):
 load_dotenv()
 
 main_service=None
+import psutil
+
+process = psutil.Process(os.getpid())
+def log_memory_usage(step: str):
+    mem = process.memory_info().rss / (1024 * 1024)  # in MB
+    print(f"[Memory] {step}: {mem:.2f} MB")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global main_service
 
+    log_memory_usage("Before MongoDB connect")
+
     # Connect to MongoDB
     await connect_to_mongo()
+    log_memory_usage("After MongoDB connect")
 
     # Initialize main service
     main_service = MainService()
+    log_memory_usage("After MainService init")
 
     yield  # app is running
+    log_memory_usage("During running")
 
     # Shutdown: close MongoDB connection
     await close_mongo_connection()
+    log_memory_usage("After MongoDB close")
 app = FastAPI(lifespan=lifespan)
 
 # CORS
@@ -270,7 +282,7 @@ async def google_sign_in(request: dict):
 
 # API Routes for Checklists:
 @app.post("/checklists/structural/generate")
-async def generate_checklist(file: UploadFile = File(...), user_id: str = Form(...), project_id: str = Form(...), title: str = Form(...)):
+async def generate_checklist(file: UploadFile = File(...), user_id: str = Form(...), project_id: str = Form(...), title: str = Form(...), state: str = Form(...), city: str = Form(...)):
     """
     Analyze a structural design document and generate a contextual checklist based on past city comments.
 
@@ -293,7 +305,7 @@ async def generate_checklist(file: UploadFile = File(...), user_id: str = Form(.
 
         try:
             # Generate checklist
-            checklist_response = await main_service.generate_structural_checklist(temp_file_path, user_id, project_id, title)
+            checklist_response = await main_service.generate_structural_checklist(temp_file_path, user_id, project_id, state, city)
             return checklist_response
 
         finally:
