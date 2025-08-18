@@ -3,7 +3,7 @@ import tempfile
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Query
 from fastapi.responses import JSONResponse
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -63,6 +63,13 @@ class UpdatePlanCheckRequest(BaseModel):
 class UpdateChecklistRequest(BaseModel):
     checklist_id: str
     project_info: ProjectInfo
+
+class UserProjectsRequest(BaseModel):
+    user_id: str
+    page: Optional[int] = 1
+    limit: Optional[int] = 4
+    search: Optional[str] = ""
+    status: Optional[str] = None
 
 # Load Env
 load_dotenv()
@@ -181,12 +188,19 @@ async def create_project(request: dict):
         raise (HTTPException(status_code=500, detail=f"Failed to create project: {str(e)}"))
 
 @app.post('/projects/structural/get-all')
-async def get_projects_by_user(request: UserIdRequest):
+async def get_projects_by_user(request: UserProjectsRequest):
     try:
-        projects = await main_service.get_projects_by_user(user_id=request.user_id)
-        return projects
+        result = await main_service.get_projects_by_user(
+            user_id=request.user_id,
+            page=request.page,
+            limit=request.limit,
+            search=request.search,
+            status=request.status
+        )
+        return result
     except Exception as e:
-        raise (HTTPException(status_code=500, detail=f"Failed to get checklists: {str(e)}"))
+        raise HTTPException(status_code=500, detail=f"Failed to get projects: {str(e)}")
+
 
 @app.get("/projects/structural/{id}")
 async def get_project_by_id(id: str):

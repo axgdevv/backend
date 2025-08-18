@@ -33,6 +33,9 @@ from dotenv import load_dotenv
 
 from database import get_database
 from pymongo import ReturnDocument
+import re
+import math
+from pymongo import DESCENDING
 
 load_dotenv()
 
@@ -1023,13 +1026,54 @@ class MainService:
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Error creating a new project: {str(e)}")
 
-    async def get_projects_by_user(self, user_id) -> List[dict]:
-        """Get all projects for a user"""
-        cursor = self.db["projects"].find({"user_id": user_id}).sort("created_at", -1)
+    async def get_projects_by_user(
+            self,
+            user_id: str,
+            page: int = 1,
+            limit: int = 4,
+            search: str = "",
+            status: Optional[str] = None
+    ) -> dict:
+        """Get paginated projects with search/filter - NO BACKEND CACHING"""
+
+        # Build filter query
+        filter_query = {"user_id": user_id}
+
+        # Add search filter
+        if search and search.strip():
+            search_regex = re.compile(re.escape(search.strip()), re.IGNORECASE)
+            filter_query["$or"] = [
+                {"project_name": {"$regex": search_regex}},
+                {"client_name": {"$regex": search_regex}},
+                {"city": {"$regex": search_regex}},
+                {"state": {"$regex": search_regex}},
+                {"project_type": {"$regex": search_regex}}
+            ]
+
+        # Add status filter
+        if status:
+            filter_query["status"] = status
+
+        # Count total and calculate pagination
+        total_projects = await self.db["projects"].count_documents(filter_query)
+        total_pages = math.ceil(total_projects / limit) if total_projects > 0 else 1
+        skip = (page - 1) * limit
+
+        # Fetch projects (NO CACHING HERE)
+        cursor = self.db["projects"].find(filter_query).sort("created_at", DESCENDING).skip(skip).limit(limit)
         projects = await cursor.to_list(None)
+
+        # Convert ObjectId to string
         for project in projects:
             project["_id"] = str(project["_id"])
-        return projects
+
+        return {
+            "projects": projects,
+            "total_projects": total_projects,
+            "total_pages": total_pages,
+            "current_page": page,
+            "limit": limit
+        }
 
     async def get_project_by_id(self, project_id) -> dict:
         """Get project by ID"""
@@ -1056,7 +1100,6 @@ class MainService:
             qa["_id"] = str(qa["_id"])
             # Optional: convert project_id to string if you return it
             qa["project_id"] = str(qa["project_id"])
-        print(qas)
         return qas
 
     async def get_project_checklists(self, project_id) -> List[dict]:
