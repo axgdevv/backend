@@ -93,33 +93,23 @@ class DeleteChecklistRequest(BaseModel):
 load_dotenv()
 
 main_service=None
-import psutil
 
-process = psutil.Process(os.getpid())
-def log_memory_usage(step: str):
-    mem = process.memory_info().rss / (1024 * 1024)  # in MB
-    print(f"[Memory] {step}: {mem:.2f} MB")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global main_service
 
-    log_memory_usage("Before MongoDB connect")
-
     # Connect to MongoDB
     await connect_to_mongo()
-    log_memory_usage("After MongoDB connect")
 
     # Initialize main service
     main_service = MainService()
-    log_memory_usage("After MainService init")
 
     yield  # app is running
-    log_memory_usage("During running")
 
     # Shutdown: close MongoDB connection
     await close_mongo_connection()
-    log_memory_usage("After MongoDB close")
+
 app = FastAPI(lifespan=lifespan)
 
 # CORS
