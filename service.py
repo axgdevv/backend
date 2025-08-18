@@ -900,10 +900,19 @@ class MainService:
             checklist["project_id"] = str(checklist["project_id"])
         return checklist
 
-    async def delete_checklist(self, checklist_id: str):
+    async def delete_checklist(self, checklist_id: str, project_id: str, user_id: str):
+        """Delete checklist by ID and decrement checklist_count in project"""
+        # First, delete the checklist
         result = await self.db["checklists"].delete_one({"_id": ObjectId(checklist_id)})
         if result.deleted_count == 0:
             raise HTTPException(status_code=404, detail="Checklist not found")
+
+        # Then decrement the checklist_count in the project
+        await self.db["projects"].update_one(
+            {"_id": ObjectId(project_id), "user_id": user_id},
+            {"$inc": {"checklist_count": -1}}
+        )
+
         return {"message": "Checklist deleted successfully"}
 
     # QA Business Logic:
@@ -994,11 +1003,19 @@ class MainService:
             qa["project_id"] = str(qa["project_id"])
         return qa
 
-    async def delete_qa(self, qa_id: str):
-        """Delete QA by ID"""
+    async def delete_qa(self, qa_id: str, project_id: str, user_id: str):
+        """Delete QA by ID and decrement qa_count in project"""
+        # First, delete the QA
         result = await self.db["qas"].delete_one({"_id": ObjectId(qa_id)})
         if result.deleted_count == 0:
             raise HTTPException(status_code=404, detail="QA not found")
+
+        # Then decrement the qa_count in the project
+        await self.db["projects"].update_one(
+            {"_id": ObjectId(project_id), "user_id": user_id},
+            {"$inc": {"qa_count": -1}}
+        )
+
         return {"message": "QA deleted successfully"}
 
     # Project Business Logic:
@@ -1082,45 +1099,116 @@ class MainService:
             project["_id"] = str(project["_id"])
         return project
 
-    async def get_project_qas(self, project_id) -> List[dict]:
-        """Get all QAs for a project"""
-        try:
-            project_obj_id = ObjectId(project_id)
-        except:
-            raise ValueError(f"Invalid project_id: {project_id}")
+    # business logic
 
-        cursor = self.db["qas"].find(
-            {"project_id": project_obj_id}
-        ).sort("created_at", -1)
+    async def get_project_qas(self, project_id, page=1, limit=4) -> dict:
+        """Get paginated QAs with pagination metadata"""
+        project_obj_id = ObjectId(project_id)
 
-        qas = await cursor.to_list(length=None)
+        # Build filter query
+        filter_query = {"project_id": project_obj_id}
 
-        # Convert ObjectId to string for JSON serialization
+        # Count total and calculate pagination
+        total_qas = await self.db["qas"].count_documents(filter_query)
+        total_pages = math.ceil(total_qas / limit) if total_qas > 0 else 1
+        skip = (page - 1) * limit
+
+        # Fetch QAs
+        cursor = (
+            self.db["qas"]
+            .find(filter_query)
+            .sort("created_at", DESCENDING)
+            .skip(skip)
+            .limit(limit)
+        )
+        qas = await cursor.to_list(length=limit)
+
+        # Convert ObjectId to string
         for qa in qas:
             qa["_id"] = str(qa["_id"])
-            # Optional: convert project_id to string if you return it
             qa["project_id"] = str(qa["project_id"])
-        return qas
 
-    async def get_project_checklists(self, project_id) -> List[dict]:
-        """Get all Checklists for a project"""
-        try:
-            project_obj_id = ObjectId(project_id)
-        except:
-            raise ValueError(f"Invalid project_id: {project_id}")
+        return {
+            "qas": qas,
+            "total_qas": total_qas,
+            "total_pages": total_pages,
+            "current_page": page,
+            "limit": limit,
+            "has_next": page < total_pages,
+            "has_prev": page > 1
+        }
 
-        cursor = self.db["checklists"].find(
-            {"project_id": project_obj_id}
-        ).sort("created_at", -1)
+    async def get_project_checklists(self, project_id, page=1, limit=4) -> dict:
+        """Get paginated checklists with pagination metadata"""
+        project_obj_id = ObjectId(project_id)
 
-        checklists = await cursor.to_list(length=None)
+        # Build filter query
+        filter_query = {"project_id": project_obj_id}
 
-        # Convert ObjectId to string for JSON serialization
+        # Count total and calculate pagination
+        total_checklists = await self.db["checklists"].count_documents(filter_query)
+        total_pages = math.ceil(total_checklists / limit) if total_checklists > 0 else 1
+        skip = (page - 1) * limit
+
+        # Fetch checklists
+        cursor = (
+            self.db["checklists"]
+            .find(filter_query)
+            .sort("created_at", DESCENDING)
+            .skip(skip)
+            .limit(limit)
+        )
+        checklists = await cursor.to_list(length=limit)
+
+        # Convert ObjectId to string
         for checklist in checklists:
             checklist["_id"] = str(checklist["_id"])
-            # Optional: convert project_id to string if you return it
             checklist["project_id"] = str(checklist["project_id"])
-        return checklists
+
+        return {
+            "checklists": checklists,
+            "total_checklists": total_checklists,
+            "total_pages": total_pages,
+            "current_page": page,
+            "limit": limit,
+            "has_next": page < total_pages,
+            "has_prev": page > 1
+        }
+
+    async def update_project_status(
+            self, project_id: str, new_status: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Updates the status of a project in the database.
+
+        Args:
+            project_id: The string ID of the project to update.
+            new_status: The new status to set for the project.
+
+        Returns:
+            The updated project document as a dictionary, or None if the project was not found.
+        """
+        try:
+            project_obj_id = ObjectId(project_id)
+
+            # Find and update the document, returning the new version
+            updated_project = await self.db["projects"].find_one_and_update(
+                {"_id": project_obj_id},
+                {"$set": {"status": new_status}},
+                return_document=True  # Return the document AFTER the update
+            )
+
+            if not updated_project:
+                return None
+
+            # Convert the ObjectId to a string for JSON serialization
+            updated_project["_id"] = str(updated_project["_id"])
+            return updated_project
+
+        except Exception as e:
+            # Re-raise the exception to be handled by the router
+            print(f"Error in service while updating project status: {e}")
+            raise
 
     async def delete_project(self, project_id: str, user_id: str):
         """Delete project and all associated checklists and QAs"""
