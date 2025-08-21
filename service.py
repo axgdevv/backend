@@ -9,29 +9,27 @@ import hashlib
 
 from bson import ObjectId
 from datetime import datetime
-# FastAPI:
 from fastapi import HTTPException
 
 # Pydantic
 from pydantic import BaseModel
 
-# LangChain:
+# LangChain
 from langchain.schema import Document
 
-# Qdrant:
+# Qdrant
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue, \
     PayloadSchemaType
 import uuid
 
-# Gemini:
+# Gemini
 from google import genai
 from google.genai import types
 
-# Load Environment variable
 from dotenv import load_dotenv
 
-from database import get_database
+from database import get_database_sync
 from pymongo import ReturnDocument
 import re
 import math
@@ -39,11 +37,11 @@ from pymongo import DESCENDING
 
 load_dotenv()
 
-# Load Gemini Client:
+# Initialize Gemini client
 client = genai.Client(api_key=os.getenv("GEMINI_KEY"))
 
 
-# Plan Review:
+# Plan Review Models
 class ProjectInfo(BaseModel):
     project_name: str
     client_name: str
@@ -63,7 +61,7 @@ class QAResponse(BaseModel):
     items: List[PlanCheckItem]
 
 
-# Checklist Generation:
+# Checklist Generation Models
 class ChecklistItem(BaseModel):
     category: str
     item: str
@@ -88,7 +86,7 @@ class DesignAnalysis(BaseModel):
     key_elements: List[str]
 
 
-# City Comments:
+# City Comments Models
 class Comment(BaseModel):
     text: str
 
@@ -118,37 +116,36 @@ class DashboardStats(BaseModel):
 def cleanup_memory():
     """Force garbage collection to free up memory"""
     collected = gc.collect()
-    print(f"Garbage collector: collected {collected} objects")
+    # print(f"Garbage collector: collected {collected} objects")
 
 
 class PlanCheck:
     def __init__(self):
         self.gemini_client = client
         self.qdrant_client = None
-        self.default_collection = "city_comments"  # Default collection name
+        self.default_collection = "city_comments"
 
-        # Don't initialize embeddings until needed - MEMORY OPTIMIZATION
+        # Lazy load embeddings to reduce memory usage
         self.embeddings = None
-        # Use lighter embedding model - MEMORY OPTIMIZATION
         self._embedding_model_name = os.getenv("EMBEDDING_MODEL", "sentence-transformers/paraphrase-MiniLM-L3-v2")
 
-        # Initialize Qdrant client (lightweight)
+        # Initialize Qdrant client
         self._initialize_qdrant()
 
     def _get_embeddings(self):
-        """Lazy load embeddings only when needed - MEMORY OPTIMIZATION"""
+        """Load embeddings model only when needed"""
         if self.embeddings is None:
-            print("Loading embedding model (this may take a moment)...")
+            # print("Loading embedding model (this may take a moment)...")
             from langchain_community.embeddings import HuggingFaceEmbeddings
             self.embeddings = HuggingFaceEmbeddings(
                 model_name=self._embedding_model_name,
                 model_kwargs={'device': 'cpu'}
             )
-            print(f"Embedding model '{self._embedding_model_name}' loaded successfully")
+            # print(f"Embedding model '{self._embedding_model_name}' loaded successfully")
         return self.embeddings
 
     def _initialize_qdrant(self):
-        """Initialize Qdrant cloud client - NO TEST OPERATIONS"""
+        """Initialize Qdrant cloud client"""
         try:
             qdrant_url = os.getenv("QDRANT_URL")
             qdrant_api_key = os.getenv("QDRANT_API_KEY")
@@ -162,10 +159,10 @@ class PlanCheck:
                 timeout=30,
             )
 
-            print("Qdrant client initialized (connection will be verified on first use)")
+            # print("Qdrant client initialized (connection will be verified on first use)")
 
         except Exception as e:
-            print(f"CRITICAL ERROR: Failed to initialize Qdrant connection: {str(e)}")
+            # print(f"CRITICAL ERROR: Failed to initialize Qdrant connection: {str(e)}")
             raise RuntimeError(f"Cannot start service without Qdrant connection: {str(e)}")
 
     def _generate_content_hash(self, content: str) -> str:
@@ -192,12 +189,10 @@ class PlanCheck:
             # Check against existing documents in the collection
             if self._collection_exists(collection_name):
                 try:
-                    # Search for existing documents with similar content
+                    # Sample a few documents to check for existing hashes
                     embeddings = self._get_embeddings()
                     existing_hashes = set()
 
-                    # Sample a few documents to check for existing hashes
-                    # This is a simplified approach - in production, you might want to store hashes as metadata
                     for chunk in unique_chunks[:10]:  # Check first 10 documents as sample
                         query_embedding = embeddings.embed_query(chunk.page_content)
                         search_results = self.qdrant_client.search(
@@ -244,11 +239,11 @@ class PlanCheck:
 
     def create_or_update_vectorstore(self, chunks: List[Document], collection_name: str = None,
                                      append_mode: bool = True):
-        """Create or append to vector store - loads embeddings on demand"""
+        """Create or append to vector store"""
         if collection_name is None:
             collection_name = self.default_collection
 
-        embeddings = self._get_embeddings()  # Load embeddings only when needed
+        embeddings = self._get_embeddings()
 
         # Check for duplicates
         unique_chunks = self._check_for_duplicates(chunks, collection_name)
@@ -333,7 +328,7 @@ class PlanCheck:
                         "project_type": chunk.metadata.get("project_type", "Unknown"),
                         "file_name": chunk.metadata.get("file_name", "Unknown"),
                         "page": chunk.metadata.get("page", None),
-                        "content_hash": content_hash  # Store hash for future duplicate detection
+                        "content_hash": content_hash
                     }
                 )
                 points.append(point)
@@ -353,7 +348,7 @@ class PlanCheck:
             raise
 
     def load_vectorstore(self, collection_name: str = None):
-        """Check if vector store exists - lightweight operation"""
+        """Check if vector store exists"""
         if collection_name is None:
             collection_name = self.default_collection
 
@@ -370,7 +365,7 @@ class PlanCheck:
                              city_filter: Optional[str] = None,
                              state_filter: Optional[str] = None,
                              project_type_filter: Optional[str] = None) -> List[Document]:
-        """Helper method to search with specific filters"""
+        """Search with specific filters"""
         if collection_name is None:
             collection_name = self.default_collection
 
@@ -380,19 +375,16 @@ class PlanCheck:
 
             filter_conditions = []
 
-            # Add city filter if provided
             if city_filter:
                 filter_conditions.append(
                     FieldCondition(key="city", match=MatchValue(value=city_filter))
                 )
 
-            # Add state filter if provided
             if state_filter:
                 filter_conditions.append(
                     FieldCondition(key="state", match=MatchValue(value=state_filter))
                 )
 
-            # Add project type filter if provided
             if project_type_filter:
                 filter_conditions.append(
                     FieldCondition(key="project_type", match=MatchValue(value=project_type_filter))
@@ -443,7 +435,7 @@ class PlanCheck:
             return []
 
     def setup_retriever(self, collection_name: str = None):
-        """Lightweight setup - just check collection exists"""
+        """Set up retriever for collection"""
         if collection_name is None:
             collection_name = self.default_collection
 
@@ -467,8 +459,8 @@ class PlanCheck:
             print(f"Error listing collections: {e}")
             return []
 
-    async def process_comments(self, city_comments: List[ProjectCommentsResponse], collection_name: str = None,
-                               append_mode: bool = True):
+    def process_comments(self, city_comments: List[ProjectCommentsResponse], collection_name: str = None,
+                         append_mode: bool = True):
         """Process comments and create vectorstore"""
         if collection_name is None:
             collection_name = self.default_collection
@@ -503,7 +495,7 @@ class PlanCheck:
         else:
             print("No documents to process")
 
-    async def extract_comments_with_gemini(self, temp_file_paths: List[str]) -> list[ProjectCommentsResponse]:
+    def extract_comments_with_gemini(self, temp_file_paths: List[str]) -> list[ProjectCommentsResponse]:
         """Extract structured city comments from PDF using Gemini AI"""
         try:
             multiple_city_comments = []
@@ -538,7 +530,7 @@ class PlanCheck:
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Error extracting comments from documents: {str(e)}")
 
-    async def analyze_structural_design_with_gemini(self, design_file_path: str) -> DesignAnalysis:
+    def analyze_structural_design_with_gemini(self, design_file_path: str) -> DesignAnalysis:
         """Analyze a structural design document using Gemini AI"""
         try:
             prompt_path = os.path.join(os.path.dirname(__file__), "prompts", "analyze_design.txt")
@@ -583,8 +575,8 @@ class PlanCheck:
             print(f"Error analyzing design document: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Error analyzing design document: {str(e)}")
 
-    async def generate_structural_checklist(self, design_analysis: DesignAnalysis, state: str, city: str,
-                                            collection_name: str = None) -> ChecklistResponse:
+    def generate_structural_checklist(self, design_analysis: DesignAnalysis, state: str, city: str,
+                                      collection_name: str = None) -> ChecklistResponse:
         """Generate a contextual checklist based on design analysis"""
         if collection_name is None:
             collection_name = self.default_collection
@@ -601,46 +593,56 @@ class PlanCheck:
 
     DESIGN ANALYSIS:
     - Project Type: {design_analysis.project_type}
-    - CityLocation: {city}, {state}
+    - City/Location: {design_analysis.city}
     - Design Description: {design_analysis.design_description}
     - Key Elements: {', '.join(design_analysis.key_elements)}
 
-    RELEVANT PAST CITY COMMENTS ({len(relevant_comments)} comments from {city}, {state} using collection '{collection_name}'):
+    RELEVANT PAST CITY COMMENTS ({len(relevant_comments)} comments from {design_analysis.city}):
     {comments_context}
 
     You must return ONLY a valid JSON object with this exact structure:
     {{
       "project_info": {{
-        "project_name": "{design_analysis.project_type} Project",
-        "client_name": "TBD"
+        "city": "{design_analysis.city}",
+        "project_type": "{design_analysis.project_type}",
+        "design_focus": "Brief summary of main design focus areas"
       }},
       "checklist_items": [
         {{
           "category": "Structural",
           "item": "Verify foundation design calculations based on geotechnical report recommendations.",
-          "description": "Cross-reference proposed foundation sizing, reinforcement, and bearing capacity calculations with the specific recommendations for this project's soil conditions.",
+          "description": "Cross-reference proposed foundation sizing, reinforcement, and bearing capacity calculations with the specific recommendations for this project's soil conditions (e.g., from section 3.1 Concrete Footing Design).",
           "priority": "High"
         }},
         {{
           "category": "Code Compliance",
-          "item": "Review seismic design requirements for local building codes.",
-          "description": "Ensure seismic design parameters and lateral force resisting system meet the latest building code standards relevant to the project's location.",
+          "item": "Review seismic design requirements for California Building Code (CBC) and ASCE 7.",
+          "description": "Ensure seismic design parameters (SS, S1, SDC, Importance Factor) and lateral force resisting system (e.g., shear walls, per section 1.2 and 1.3) meet the latest California Building Code and ASCE 7 standards relevant to the project's city.",
           "priority": "High"
+        }},
+        {{
+          "category": "Documentation",
+          "item": "Ensure all structural drawings clearly differentiate existing, demolished, and new construction.",
+          "description": "Verify drawing clarity and consistent use of symbols, especially for remodel/renovation projects as per section 5.1 and 5.3 of the General Checklist.",
+          "priority": "Medium"
         }}
       ],
-      "relevant_comments_count": {len(relevant_comments)},
       "summary_of_key_concerns": "Summarize the overarching concerns derived from the relevant past city comments and their implications for the design.",
       "suggested_next_steps": [
-        "Outline actionable next steps for the engineering team, prioritizing critical items based on the generated checklist and identified concerns."
+        "Outline actionable next steps for the engineering team, prioritizing critical items based on the generated checklist and identified concerns.",
+        "For example: 'Coordinate with geotechnical engineer for a revised report addressing liquefaction concerns.'"
       ]
     }}
 
     REQUIREMENTS:
-    1. Select, adapt, and refine checklist items making them specifically relevant to the design analysis and city comments.
-    2. Generate a comprehensive list of checklist items - include all highly relevant and specific checks.
-    3. Categories: Structural, Code Compliance, Documentation, Design Details, Safety.
-    4. Priority levels: High, Medium, Low.
-    5. Return ONLY the JSON object - no additional text or formatting."""
+    1.  **Select, adapt, and refine checklist items** from the "GENERAL STRUCTURAL QA CHECKLIST" provided, making them specifically relevant to the "DESIGN ANALYSIS" and any issues highlighted in "RELEVANT PAST CITY COMMENTS".
+    2.  **Generate a comprehensive list of checklist items.** Do not limit the number of items; include all highly relevant and specific checks.
+    3.  **Ensure items are "to the point" and actionable.** Avoid vague statements.
+    4.  Categories for checklist items: Structural, Code Compliance, Documentation, Design Details, Safety.
+    5.  Priority levels: High, Medium, Low (assign logically based on criticality and potential impact).
+    6.  Provide a concise `summary_of_key_concerns` that synthesizes critical issues and common themes from the `RELEVANT PAST CITY COMMENTS`.
+    7.  Outline clear and actionable `suggested_next_steps` for the project, directly addressing the checklist items and key concerns.
+    8.  Return ONLY the JSON object - no additional text or formatting."""
 
         try:
             response = self.gemini_client.models.generate_content(
@@ -662,7 +664,6 @@ class PlanCheck:
                     checklist_data = ChecklistResponse.model_validate(parsed_dict)
                 except json.JSONDecodeError as e:
                     print(f"Error: Could not decode JSON from raw text. {e}")
-                    # Create fallback response instead of returning
                     checklist_data = ChecklistResponse(
                         project_info=ProjectInfo(project_name="Unknown Project", client_name="TBD"),
                         checklist_items=[],
@@ -672,7 +673,6 @@ class PlanCheck:
                     )
                 except Exception as e:
                     print(f"Error: Could not validate JSON against ChecklistResponse model. {e}")
-                    # Create fallback response instead of returning
                     checklist_data = ChecklistResponse(
                         project_info=ProjectInfo(project_name="Unknown Project", client_name="TBD"),
                         checklist_items=[],
@@ -685,7 +685,6 @@ class PlanCheck:
 
         except Exception as e:
             print(f"Error generating checklist with Gemini: {str(e)}")
-            # Return fallback response instead of raising
             return ChecklistResponse(
                 project_info=ProjectInfo(project_name="Unknown Project", client_name="TBD"),
                 checklist_items=[],
@@ -696,7 +695,7 @@ class PlanCheck:
 
     def get_contextual_comments(self, design_analysis: DesignAnalysis, state: str, city: str,
                                 collection_name: str = None, max_comments: int = 50) -> List[Document]:
-        """Retrieve contextually relevant comments based on design analysis with hierarchical search strategy"""
+        """Retrieve contextually relevant comments with hierarchical search strategy"""
         if collection_name is None:
             collection_name = self.default_collection
 
@@ -739,8 +738,8 @@ class PlanCheck:
                     print(f"Level 3 successful: Found {len(relevant_comments)} comments")
                     return relevant_comments
 
-            # Level 4: No filters - let LLM do the heavy lifting
-            print("Level 4: No relevant comments found, returning empty list for LLM processing")
+            # Level 4: No filters
+            print("Level 4: No relevant comments found, returning empty list")
             return []
 
         except Exception as e:
@@ -748,7 +747,7 @@ class PlanCheck:
             return []
 
     def cleanup_embeddings(self):
-        """Clean up embeddings from memory - MEMORY OPTIMIZATION"""
+        """Clean up embeddings from memory"""
         if self.embeddings is not None:
             del self.embeddings
             self.embeddings = None
@@ -758,21 +757,21 @@ class PlanCheck:
 
 class MainService:
     def __init__(self):
-        # Only initialize lightweight components at startup - MEMORY OPTIMIZATION
+        # Initialize core components
         self.plan_check = PlanCheck()
 
-        # Don't load vectorstore at startup - MEMORY OPTIMIZATION
-        self.vectorstore_loaded = {}  # Track loaded collections
+        # Track loaded collections
+        self.vectorstore_loaded = {}
 
         try:
-            self.db = get_database()
+            self.db = get_database_sync()
             print("MainService initialized with database connection")
         except Exception as e:
             print(f"Warning: Could not initialize database: {e}")
             self.db = None
 
     def _ensure_vectorstore_loaded(self, collection_name: str = None):
-        """Load vectorstore only when needed - MEMORY OPTIMIZATION"""
+        """Load vectorstore only when needed"""
         if collection_name is None:
             collection_name = self.plan_check.default_collection
 
@@ -789,14 +788,14 @@ class MainService:
         """List all available collections"""
         return self.plan_check.list_collections()
 
-    async def ingest_comments(self, temp_file_paths: List[str], collection_name: str = "city_comments") -> Dict:
-        """Ingest comments - loads embeddings on demand"""
+    def ingest_comments(self, temp_file_paths: List[str], collection_name: str = "city_comments") -> Dict:
+        """Ingest comments"""
         try:
             print(f"Starting comment ingestion into collection '{collection_name}'...")
-            project_comments_data = await self.plan_check.extract_comments_with_gemini(temp_file_paths)
-            await self.plan_check.process_comments(project_comments_data, collection_name, append_mode=True)
+            project_comments_data = self.plan_check.extract_comments_with_gemini(temp_file_paths)
+            self.plan_check.process_comments(project_comments_data, collection_name, append_mode=True)
 
-            # Clean up embeddings after use - MEMORY OPTIMIZATION
+            # Clean up embeddings after use
             self.plan_check.cleanup_embeddings()
 
             self.vectorstore_loaded[collection_name] = True
@@ -814,9 +813,9 @@ class MainService:
                 "collection_name": collection_name
             }
 
-    # Users Business Logic:
-    async def google_sign_in(self, user_data: dict) -> str:
-        """Create or update a Google user in MongoDB."""
+    # User Management
+    def google_sign_in(self, user_data: dict) -> str:
+        """Create or update a Google user in MongoDB"""
         filter_query = {"email": user_data.get("email", "")}
         update_data = {
             "$set": {
@@ -833,7 +832,7 @@ class MainService:
             }
         }
 
-        updated_user = await self.db["users"].find_one_and_update(
+        updated_user = self.db["users"].find_one_and_update(
             filter_query,
             update_data,
             upsert=True,
@@ -841,20 +840,20 @@ class MainService:
         )
         return str(updated_user["_id"])
 
-    # Checklist Business Logic:
-    async def generate_structural_checklist(self, file_path: str, user_id: str, project_id: str, title: str, state: str,
-                                            city: str, collection_name: str = "city_comments"):
-        """Generate checklist - loads embeddings on demand"""
+    # Checklist Management
+    def generate_structural_checklist(self, file_path: str, user_id: str, project_id: str, title: str, state: str,
+                                      city: str, collection_name: str = "city_comments"):
+        """Generate checklist"""
         try:
             # Ensure vectorstore is loaded before generating checklist
             self._ensure_vectorstore_loaded(collection_name)
 
-            structural_design_analysis = await self.plan_check.analyze_structural_design_with_gemini(file_path)
-            structural_checklist = await self.plan_check.generate_structural_checklist(
+            structural_design_analysis = self.plan_check.analyze_structural_design_with_gemini(file_path)
+            structural_checklist = self.plan_check.generate_structural_checklist(
                 structural_design_analysis, state, city, collection_name
             )
 
-            # Clean up embeddings after use - MEMORY OPTIMIZATION
+            # Clean up embeddings after use
             self.plan_check.cleanup_embeddings()
 
             # Convert to dict for database storage
@@ -864,8 +863,8 @@ class MainService:
                 "user_id": user_id,
                 "project_id": ObjectId(project_id),
                 "title": title,
-                "collection_used": collection_name,  # Track which collection was used
-                "project_info": structural_checklist_dict.get("project_info", {}),  # Store project_info
+                "collection_used": collection_name,
+                "project_info": structural_checklist_dict.get("project_info", {}),
                 "checklist_items": structural_checklist_dict.get("checklist_items", []),
                 "checklist_item_count": len(structural_checklist_dict.get("checklist_items", [])),
                 "relevant_comments_count": structural_checklist_dict.get("relevant_comments_count", 0),
@@ -875,9 +874,9 @@ class MainService:
                 "updated_at": datetime.now(),
             }
 
-            result = await self.db["checklists"].insert_one(data)
+            result = self.db["checklists"].insert_one(data)
 
-            await self.db["projects"].update_one(
+            self.db["projects"].update_one(
                 {"_id": ObjectId(project_id), "user_id": user_id},
                 {"$inc": {"checklist_count": 1}}
             )
@@ -892,32 +891,29 @@ class MainService:
             print(f"Error generating design checklist: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Error generating design checklist: {str(e)}")
 
-    async def get_checklist_by_id(self, checklist_id: str):
+    def get_checklist_by_id(self, checklist_id: str):
         """Get checklist by ID"""
-        checklist = await self.db["checklists"].find_one({"_id": ObjectId(checklist_id)})
+        checklist = self.db["checklists"].find_one({"_id": ObjectId(checklist_id)})
         if checklist:
             checklist["_id"] = str(checklist["_id"])
             checklist["project_id"] = str(checklist["project_id"])
         return checklist
 
-    async def delete_checklist(self, checklist_id: str, project_id: str, user_id: str):
-        """Delete checklist by ID and decrement checklist_count in project"""
-        # First, delete the checklist
-        result = await self.db["checklists"].delete_one({"_id": ObjectId(checklist_id)})
+    def delete_checklist(self, checklist_id: str, project_id: str, user_id: str):
+        """Delete checklist by ID and update project counter"""
+        result = self.db["checklists"].delete_one({"_id": ObjectId(checklist_id)})
         if result.deleted_count == 0:
             raise HTTPException(status_code=404, detail="Checklist not found")
 
-        # Then decrement the checklist_count in the project
-        await self.db["projects"].update_one(
+        self.db["projects"].update_one(
             {"_id": ObjectId(project_id), "user_id": user_id},
             {"$inc": {"checklist_count": -1}}
         )
 
         return {"message": "Checklist deleted successfully"}
 
-    # QA Business Logic:
-    async def execute_qa(self, temp_file_paths: List[str], user_id: str,
-                         project_id: str, title: str):
+    # QA Management
+    def execute_qa(self, temp_file_paths: List[str], user_id: str, project_id: str, title: str):
         """Execute QA on the provided design set"""
         prompt_path = os.path.join(os.path.dirname(__file__), "prompts", "plan_qa.txt")
         with open(prompt_path, "r") as f:
@@ -952,36 +948,33 @@ class MainService:
                     qa_response = QAResponse.model_validate(parsed_dict)
                 except json.JSONDecodeError as e:
                     print(f"Error: Could not decode JSON from raw text. {e}")
-                    # Create a proper QAResponse object instead of returning it
                     qa_response = QAResponse(
                         project_info=ProjectInfo(project_name="Unknown", client_name="Unknown"),
                         items=[]
                     )
                 except Exception as e:
                     print(f"Error: Could not validate JSON against QAResponse model. {e}")
-                    # Create a proper QAResponse object instead of returning it
                     qa_response = QAResponse(
                         project_info=ProjectInfo(project_name="Unknown", client_name="Unknown"),
                         items=[]
                     )
 
-            # Now qa_response is guaranteed to be a QAResponse object
             qa_response_dict = qa_response.model_dump()
 
             data = {
                 "title": title,
                 "project_id": ObjectId(project_id),
                 "user_id": user_id,
-                "project_info": qa_response_dict.get("project_info", {}),  # Add this line
+                "project_info": qa_response_dict.get("project_info", {}),
                 "items": qa_response_dict.get("items", []),
                 "qa_item_count": len(qa_response_dict.get("items", [])),
                 "created_at": datetime.now(),
                 "updated_at": datetime.now(),
             }
 
-            result = await self.db["qas"].insert_one(data)
+            result = self.db["qas"].insert_one(data)
 
-            await self.db["projects"].update_one(
+            self.db["projects"].update_one(
                 {"_id": ObjectId(project_id), "user_id": user_id},
                 {"$inc": {"qa_count": 1}}
             )
@@ -995,31 +988,29 @@ class MainService:
             print(f"Error executing plan check: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Error executing plan check: {str(e)}")
 
-    async def get_qa_by_id(self, qa_id: str) -> Optional[dict]:
+    def get_qa_by_id(self, qa_id: str) -> Optional[dict]:
         """Get QA by ID"""
-        qa = await self.db["qas"].find_one({"_id": ObjectId(qa_id)})
+        qa = self.db["qas"].find_one({"_id": ObjectId(qa_id)})
         if qa:
             qa["_id"] = str(qa["_id"])
             qa["project_id"] = str(qa["project_id"])
         return qa
 
-    async def delete_qa(self, qa_id: str, project_id: str, user_id: str):
-        """Delete QA by ID and decrement qa_count in project"""
-        # First, delete the QA
-        result = await self.db["qas"].delete_one({"_id": ObjectId(qa_id)})
+    def delete_qa(self, qa_id: str, project_id: str, user_id: str):
+        """Delete QA by ID and update project counter"""
+        result = self.db["qas"].delete_one({"_id": ObjectId(qa_id)})
         if result.deleted_count == 0:
             raise HTTPException(status_code=404, detail="QA not found")
 
-        # Then decrement the qa_count in the project
-        await self.db["projects"].update_one(
+        self.db["projects"].update_one(
             {"_id": ObjectId(project_id), "user_id": user_id},
             {"$inc": {"qa_count": -1}}
         )
 
         return {"message": "QA deleted successfully"}
 
-    # Project Business Logic:
-    async def create_project(self, project_data: dict) -> dict:
+    # Project Management
+    def create_project(self, project_data: dict) -> dict:
         """Create a new project for a user"""
         try:
             data = {
@@ -1036,14 +1027,14 @@ class MainService:
                 "status": project_data.get("status", "in_progress"),
             }
 
-            result = await self.db["projects"].insert_one(data)
+            result = self.db["projects"].insert_one(data)
 
             return {"_id": str(result.inserted_id)}
 
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Error creating a new project: {str(e)}")
 
-    async def get_projects_by_user(
+    def get_projects_by_user(
             self,
             user_id: str,
             page: int = 1,
@@ -1051,7 +1042,7 @@ class MainService:
             search: str = "",
             status: Optional[str] = None
     ) -> dict:
-        """Get paginated projects with search/filter - NO BACKEND CACHING"""
+        """Get paginated projects with search/filter"""
 
         # Build filter query
         filter_query = {"user_id": user_id}
@@ -1072,13 +1063,13 @@ class MainService:
             filter_query["status"] = status
 
         # Count total and calculate pagination
-        total_projects = await self.db["projects"].count_documents(filter_query)
+        total_projects = self.db["projects"].count_documents(filter_query)
         total_pages = math.ceil(total_projects / limit) if total_projects > 0 else 1
         skip = (page - 1) * limit
 
-        # Fetch projects (NO CACHING HERE)
+        # Fetch projects
         cursor = self.db["projects"].find(filter_query).sort("created_at", DESCENDING).skip(skip).limit(limit)
-        projects = await cursor.to_list(None)
+        projects = list(cursor)
 
         # Convert ObjectId to string
         for project in projects:
@@ -1092,16 +1083,14 @@ class MainService:
             "limit": limit
         }
 
-    async def get_project_by_id(self, project_id) -> dict:
+    def get_project_by_id(self, project_id) -> dict:
         """Get project by ID"""
-        project = await self.db["projects"].find_one({"_id": ObjectId(project_id)})
+        project = self.db["projects"].find_one({"_id": ObjectId(project_id)})
         if project:
             project["_id"] = str(project["_id"])
         return project
 
-    # business logic
-
-    async def get_project_qas(self, project_id, page=1, limit=4) -> dict:
+    def get_project_qas(self, project_id, page=1, limit=4) -> dict:
         """Get paginated QAs with pagination metadata"""
         project_obj_id = ObjectId(project_id)
 
@@ -1109,7 +1098,7 @@ class MainService:
         filter_query = {"project_id": project_obj_id}
 
         # Count total and calculate pagination
-        total_qas = await self.db["qas"].count_documents(filter_query)
+        total_qas = self.db["qas"].count_documents(filter_query)
         total_pages = math.ceil(total_qas / limit) if total_qas > 0 else 1
         skip = (page - 1) * limit
 
@@ -1121,7 +1110,7 @@ class MainService:
             .skip(skip)
             .limit(limit)
         )
-        qas = await cursor.to_list(length=limit)
+        qas = list(cursor)
 
         # Convert ObjectId to string
         for qa in qas:
@@ -1138,7 +1127,7 @@ class MainService:
             "has_prev": page > 1
         }
 
-    async def get_project_checklists(self, project_id, page=1, limit=4) -> dict:
+    def get_project_checklists(self, project_id, page=1, limit=4) -> dict:
         """Get paginated checklists with pagination metadata"""
         project_obj_id = ObjectId(project_id)
 
@@ -1146,7 +1135,7 @@ class MainService:
         filter_query = {"project_id": project_obj_id}
 
         # Count total and calculate pagination
-        total_checklists = await self.db["checklists"].count_documents(filter_query)
+        total_checklists = self.db["checklists"].count_documents(filter_query)
         total_pages = math.ceil(total_checklists / limit) if total_checklists > 0 else 1
         skip = (page - 1) * limit
 
@@ -1158,7 +1147,7 @@ class MainService:
             .skip(skip)
             .limit(limit)
         )
-        checklists = await cursor.to_list(length=limit)
+        checklists = list(cursor)
 
         # Convert ObjectId to string
         for checklist in checklists:
@@ -1175,27 +1164,18 @@ class MainService:
             "has_prev": page > 1
         }
 
-    async def update_project_status(
+    def update_project_status(
             self, project_id: str, new_status: str
     ) -> Optional[Dict[str, Any]]:
-        """
-        Updates the status of a project in the database.
-
-        Args:
-            project_id: The string ID of the project to update.
-            new_status: The new status to set for the project.
-
-        Returns:
-            The updated project document as a dictionary, or None if the project was not found.
-        """
+        """Updates the status of a project in the database"""
         try:
             project_obj_id = ObjectId(project_id)
 
             # Find and update the document, returning the new version
-            updated_project = await self.db["projects"].find_one_and_update(
+            updated_project = self.db["projects"].find_one_and_update(
                 {"_id": project_obj_id},
                 {"$set": {"status": new_status}},
-                return_document=True  # Return the document AFTER the update
+                return_document=True
             )
 
             if not updated_project:
@@ -1206,28 +1186,27 @@ class MainService:
             return updated_project
 
         except Exception as e:
-            # Re-raise the exception to be handled by the router
             print(f"Error in service while updating project status: {e}")
             raise
 
-    async def delete_project(self, project_id: str, user_id: str):
+    def delete_project(self, project_id: str, user_id: str):
         """Delete project and all associated checklists and QAs"""
         try:
             project_obj_id = ObjectId(project_id)
 
             # First verify the project belongs to the user
-            project = await self.db["projects"].find_one({"_id": project_obj_id, "user_id": user_id})
+            project = self.db["projects"].find_one({"_id": project_obj_id, "user_id": user_id})
             if not project:
                 raise HTTPException(status_code=404, detail="Project not found")
 
             # Delete associated checklists
-            checklist_result = await self.db["checklists"].delete_many({"project_id": project_obj_id})
+            checklist_result = self.db["checklists"].delete_many({"project_id": project_obj_id})
 
             # Delete associated QAs
-            qa_result = await self.db["qas"].delete_many({"project_id": project_obj_id})
+            qa_result = self.db["qas"].delete_many({"project_id": project_obj_id})
 
             # Delete the project
-            project_result = await self.db["projects"].delete_one({"_id": project_obj_id, "user_id": user_id})
+            project_result = self.db["projects"].delete_one({"_id": project_obj_id, "user_id": user_id})
 
             if project_result.deleted_count == 0:
                 raise HTTPException(status_code=404, detail="Project not found")
@@ -1243,8 +1222,8 @@ class MainService:
                 raise e
             raise HTTPException(status_code=500, detail=f"Error deleting project: {str(e)}")
 
-    # Logic for Dashboard:
-    async def get_dashboard_stats(self, user_id: str) -> DashboardStats:
+    # Dashboard Analytics
+    def get_dashboard_stats(self, user_id: str) -> DashboardStats:
         """Get dashboard statistics for a user"""
         try:
             # Get current month and year date ranges
@@ -1252,26 +1231,26 @@ class MainService:
             start_of_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
             start_of_year = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
 
-            # 1. Total Projects This Month
-            total_projects_this_month = await self.db["projects"].count_documents({
+            # Total Projects This Month
+            total_projects_this_month = self.db["projects"].count_documents({
                 "user_id": user_id,
                 "created_at": {"$gte": start_of_month}
             })
 
-            # 2. Active Projects This Month
-            active_projects_this_month = await self.db["projects"].count_documents({
+            # Active Projects This Month
+            active_projects_this_month = self.db["projects"].count_documents({
                 "user_id": user_id,
                 "created_at": {"$gte": start_of_month},
                 "status": "in_progress"
             })
 
-            # 3. Completed Projects (all time)
-            completed_projects = await self.db["projects"].count_documents({
+            # Completed Projects (all time)
+            completed_projects = self.db["projects"].count_documents({
                 "user_id": user_id,
                 "status": "completed"
             })
 
-            # 4. Projects By Location
+            # Projects By Location
             location_pipeline = [
                 {"$match": {"user_id": user_id}},
                 {
@@ -1303,9 +1282,9 @@ class MainService:
             ]
 
             location_cursor = self.db["projects"].aggregate(location_pipeline)
-            projects_by_location = await location_cursor.to_list(length=None)
+            projects_by_location = list(location_cursor)
 
-            # 5. Monthly Completed Projects This Year
+            # Monthly Completed Projects This Year
             monthly_completed_pipeline = [
                 {
                     "$match": {
@@ -1335,7 +1314,7 @@ class MainService:
             ]
 
             monthly_cursor = self.db["projects"].aggregate(monthly_completed_pipeline)
-            monthly_data = await monthly_cursor.to_list(length=None)
+            monthly_data = list(monthly_cursor)
 
             # Fill in missing months with 0 counts
             month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -1350,7 +1329,7 @@ class MainService:
                     "count": existing_months.get(month, 0)
                 })
 
-            # 6. Top Issue Categories in QA Runs
+            # Top Issue Categories in QA Runs
             categories_pipeline = [
                 {"$match": {"user_id": user_id}},
                 {"$unwind": "$items"},
@@ -1378,7 +1357,7 @@ class MainService:
             ]
 
             categories_cursor = self.db["qas"].aggregate(categories_pipeline)
-            top_issue_categories = await categories_cursor.to_list(length=None)
+            top_issue_categories = list(categories_cursor)
 
             # Calculate percentages
             total_items = sum(item['count'] for item in top_issue_categories) if top_issue_categories else 1

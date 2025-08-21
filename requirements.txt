@@ -13,3 +13,4 @@ qdrant-client~=1.15.1
 protobuf~=6.31.1
 firebase-admin
 PyJWT>=2.8.0
+aiofiles

@@ -1,5 +1,3 @@
-# auth.py - Firebase Authentication Module
-
 import os
 import json
 from typing import Optional
@@ -27,7 +25,7 @@ class FirebaseAuth:
         """Initialize Firebase Admin SDK"""
         if not firebase_admin._apps:
             # Load Firebase credentials from environment variables
-            firebase_config =  {
+            firebase_config = {
                 "type": os.getenv("FIREBASE_TYPE"),
                 "project_id": os.getenv("FIREBASE_PROJECT_ID"),
                 "private_key_id": os.getenv("FIREBASE_PRIVATE_KEY_ID"),
@@ -40,7 +38,6 @@ class FirebaseAuth:
                 "client_x509_cert_url": os.getenv("FIREBASE_CLIENT_X509_CERT_URL"),
                 "universe_domain": os.getenv("FIREBASE_UNIVERSE_DOMAIN", "googleapis.com")
             }
-
 
             # Remove None values
             firebase_config = {k: v for k, v in firebase_config.items() if v is not None}

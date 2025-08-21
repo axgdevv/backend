@@ -1,10 +1,13 @@
 import os
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo import MongoClient
 from typing import Optional
+
 
 class DatabaseManager:
     _instance = None
-    _client: Optional[AsyncIOMotorClient] = None
+    _async_client: Optional[AsyncIOMotorClient] = None
+    _sync_client: Optional[MongoClient] = None
     _database = None
 
     def __new__(cls):
@@ -12,64 +15,89 @@ class DatabaseManager:
             cls._instance = super(DatabaseManager, cls).__new__(cls)
         return cls._instance
 
-    async def connect(self):
-        """Create database connection - should be called once at startup"""
-        if self._client is None:
+    async def connect_async(self):
+        """Create async database connection - for FastAPI startup"""
+        if self._async_client is None:
             try:
-                self._client = AsyncIOMotorClient(os.getenv("MONGODB_URI"),
+                self._async_client = AsyncIOMotorClient(
+                    os.getenv("MONGODB_URI"),
                     maxPoolSize=10,
                     minPoolSize=1,
                     maxIdleTimeMS=30000,
                     serverSelectionTimeoutMS=5000,
                     socketTimeoutMS=20000,
                 )
-                self._database = self._client[os.getenv("DATABASE_NAME")]
-
-                # Test the connection
-                await self._client.admin.command('ping')
-                print('Successfully connected to Database.')
-
+                self._database = self._async_client[os.getenv("DATABASE_NAME")]
+                await self._async_client.admin.command('ping')
+                print('Successfully connected to Database (async).')
             except Exception as e:
-                print(f"Failed to connect to Database: {e}")
+                print(f"Failed to connect to Database (async): {e}")
                 raise e
 
-    async def close(self):
-        """Close database connection - should be called at shutdown"""
-        if self._client:
-            self._client.close()
-            self._client = None
-            self._database = None
-            print("Disconnected from MongoDB")
+    def connect_sync(self):
+        """Create sync database connection - for service layer"""
+        if self._sync_client is None:
+            try:
+                self._sync_client = MongoClient(os.getenv("MONGODB_URI"))
+                self._database_sync = self._sync_client[os.getenv("DATABASE_NAME")]
+                self._sync_client.admin.command('ping')
+                print('Successfully connected to Database (sync).')
+            except Exception as e:
+                print(f"Failed to connect to Database (sync): {e}")
+                raise e
+
+    async def close_async(self):
+        """Close async database connection"""
+        if self._async_client:
+            self._async_client.close()
+            self._async_client = None
+            print("Disconnected from MongoDB (async)")
+
+    def close_sync(self):
+        """Close sync database connection"""
+        if self._sync_client:
+            self._sync_client.close()
+            self._sync_client = None
+            print("Disconnected from MongoDB (sync)")
 
     @property
-    def database(self):
-        """Get database instance"""
+    def database_async(self):
+        """Get async database instance"""
         if self._database is None:
-            raise Exception("Database not connected. Call connect() first.")
+            raise Exception("Async database not connected. Call connect_async() first.")
         return self._database
 
     @property
-    def client(self):
-        """Get client instance"""
-        if self._client is None:
-            raise Exception("Database client not connected. Call connect() first.")
-        return self._client
+    def database_sync(self):
+        """Get sync database instance"""
+        if not hasattr(self, '_database_sync') or self._database_sync is None:
+            self.connect_sync()
+        return self._database_sync
 
 
 # Global database manager instance
 db_manager = DatabaseManager()
 
-# Convenience function for getting database
+
+# Convenience functions for getting database
 def get_database():
-    """Get database instance - synchronous function"""
-    return db_manager.database
+    """Get async database instance"""
+    return db_manager.database_async
+
+
+def get_database_sync():
+    """Get sync database instance"""
+    return db_manager.database_sync
 
 
 # Startup and shutdown functions
 async def connect_to_mongo():
     """Initialize database connection"""
-    await db_manager.connect()
+    await db_manager.connect_async()
+    db_manager.connect_sync()
+
 
 async def close_mongo_connection():
     """Close database connection"""
-    await db_manager.close()
+    await db_manager.close_async()
+    db_manager.close_sync()
